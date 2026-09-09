@@ -5,3 +5,6 @@
 dist/
 node_modules/
 web-ext-artifacts/
+
+# Playwright MCP
+.playwright-mcp/
