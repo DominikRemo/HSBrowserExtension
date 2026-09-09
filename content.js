@@ -340,6 +340,11 @@ function setupStyles() {
             padding-left: 28px;
         }
         .sandbox-row-delete-button {
+            /* The overlay is pointer-events:none so the grid stays clickable
+               through it; each control has to opt back in. Without the absolute
+               position the top/left set per row would also be ignored. */
+            position: absolute;
+            pointer-events: auto;
             background: none;
             border: 0;
             padding: 4px 6px;
