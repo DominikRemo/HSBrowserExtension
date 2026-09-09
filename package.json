@@ -1,6 +1,6 @@
 {
   "name": "hs-browser-extension",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "private": true,
   "description": "Utility Browser Extension für die Hacker School - Bulk Delete für CodeHS",
   "repository": {

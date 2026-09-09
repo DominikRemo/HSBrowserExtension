@@ -13,6 +13,13 @@ Alle Downloads liegen unter [Releases](https://github.com/DominikRemo/HSBrowserE
 öffnen (oder per Drag & Drop auf ein Firefox-Fenster ziehen). Die Datei ist von
 Mozilla signiert und aktualisiert sich danach automatisch über `updates.json`.
 
+> **Umstieg von der alten Version (vor 0.2.0):** Ab 0.2.0 hat die Erweiterung
+> eine neue Add-on-ID (`hs-browser-extension@remo.hacker-school.de` statt
+> `CodeHSDelte@hacker-school.de`). Firefox behandelt sie deshalb als komplett
+> neue Erweiterung: Die alte Version aktualisiert sich **nicht** von selbst und
+> muss einmalig manuell deinstalliert werden, bevor die neue installiert wird.
+> Chrome ist davon nicht betroffen.
+
 **Chrome / Edge** — `hs-browser-extension-<version>-chrome.zip` herunterladen und
 entpacken, dann unter `chrome://extensions` den Entwicklermodus aktivieren und
 „Entpackte Erweiterung laden“ auf den entpackten Ordner zeigen lassen.
