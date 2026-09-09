@@ -14,7 +14,7 @@ Alle Downloads liegen unter [Releases](https://github.com/DominikRemo/HSBrowserE
 Mozilla signiert und aktualisiert sich danach automatisch über `updates.json`.
 
 > **Umstieg von der alten Version (vor 0.2.0):** Ab 0.2.0 hat die Erweiterung
-> eine neue Add-on-ID (`hs-browser-extension@hacker-school.de` statt
+> eine neue Add-on-ID (`hs-browser-extension@remo.hacker-school.de` statt
 > `CodeHSDelte@hacker-school.de`). Firefox behandelt sie deshalb als komplett
 > neue Erweiterung: Die alte Version aktualisiert sich **nicht** von selbst und
 > muss einmalig manuell deinstalliert werden, bevor die neue installiert wird.
