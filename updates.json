@@ -1,7 +1,12 @@
 {
   "addons": {
     "hs-browser-extension@remo.hacker-school.de": {
-      "updates": []
+      "updates": [
+        {
+          "version": "0.2.0",
+          "update_link": "https://github.com/DominikRemo/HSBrowserExtension/releases/download/v0.2.0/hs-browser-extension-0.2.0.xpi"
+        }
+      ]
     }
   }
 }
