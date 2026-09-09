@@ -193,40 +193,49 @@ function setupToolbar() {
 
 // --- checkbox overlays -----------------------------------------------------
 
-// The overlay deliberately hangs off the outer .sandbox-programs-grid wrapper
+// The overlays deliberately hang off the outer .sandbox-programs-grid wrapper
 // rather than off AG Grid's own row/header containers. AG Grid rebuilds the
 // children of those containers on every render, which removed the overlay, which
 // woke the observer, which put it back — a mutual-recursion loop that pegged the
 // page. The wrapper is ours to append to and is never rebuilt.
-function getOverlay() {
+//
+// There are two layers, each clipped to the band of the grid it belongs to: the
+// header, and the scrolling body. Clipping the body layer to the viewport is what
+// stops a control belonging to a half-scrolled row from being drawn over the
+// pagination footer below it.
+function getOverlayLayer(className, rect, wrapperRect) {
     const wrapper = document.querySelector(GRID_SELECTOR);
-    if (!wrapper) return null;
+    if (!wrapper || !rect) return null;
 
     if (getComputedStyle(wrapper).position === "static") {
         wrapper.style.position = "relative";
     }
 
-    let overlay = wrapper.querySelector(":scope > .sandbox-selection-overlay");
-    if (!overlay) {
-        overlay = document.createElement("div");
-        overlay.className = "sandbox-selection-overlay";
-        overlay.style.position = "absolute";
-        overlay.style.inset = "0";
-        overlay.style.overflow = "hidden";
-        // Only the checkboxes themselves should swallow clicks; the rest of the
+    let layer = wrapper.querySelector(`:scope > .${className}`);
+    if (!layer) {
+        layer = document.createElement("div");
+        layer.className = className;
+        layer.style.position = "absolute";
+        layer.style.left = "0";
+        layer.style.width = "100%";
+        layer.style.overflow = "hidden";
+        // Only the controls themselves should swallow clicks; the rest of the
         // grid must stay clickable.
-        overlay.style.pointerEvents = "none";
-        overlay.style.zIndex = "1";
-        wrapper.appendChild(overlay);
+        layer.style.pointerEvents = "none";
+        layer.style.zIndex = "1";
+        wrapper.appendChild(layer);
     }
-    return overlay;
+
+    layer.style.top = `${rect.top - wrapperRect.top}px`;
+    layer.style.height = `${rect.height}px`;
+    return layer;
 }
 
-// Positions are measured against the wrapper, so they stay correct whether the
-// grid scrolls, sorts or re-renders.
-function placeAt(el, rect, wrapperRect) {
+// Positions are measured against the layer the control lives in, so they stay
+// correct whether the grid scrolls, sorts or re-renders.
+function placeAt(el, rect, layerRect) {
     const half = (el.offsetHeight || 14) / 2;
-    el.style.top = `${rect.top - wrapperRect.top + rect.height / 2 - half}px`;
+    el.style.top = `${rect.top - layerRect.top + rect.height / 2 - half}px`;
 }
 
 function makeCheckbox(className) {
@@ -241,27 +250,45 @@ function makeCheckbox(className) {
 }
 
 function syncRenderedCheckboxes() {
-    const overlay = getOverlay();
-    if (!overlay) return;
-    const wrapperRect = overlay.parentElement.getBoundingClientRect();
+    const wrapper = document.querySelector(GRID_SELECTOR);
+    const viewport = getViewport();
+    if (!wrapper || !viewport) return;
+    const wrapperRect = wrapper.getBoundingClientRect();
 
-    // Header select-all.
+    // Header select-all, clipped to the header band.
     const headerRow = document.querySelector(`${GRID_SELECTOR} .ag-header-row`);
     if (headerRow) {
-        let selectAllBox = overlay.querySelector(".sandbox-select-all-checkbox");
-        if (!selectAllBox) {
-            selectAllBox = makeCheckbox("sandbox-select-all-checkbox");
-            selectAllBox.title = "Select all";
-            selectAllBox.addEventListener("change", () => {
-                if (selectAllBox.checked) selectAll();
-                else clearSelection();
-            });
-            overlay.appendChild(selectAllBox);
+        const headerRect = headerRow.getBoundingClientRect();
+        const headerLayer = getOverlayLayer(
+            "sandbox-header-overlay",
+            headerRect,
+            wrapperRect
+        );
+        if (headerLayer) {
+            let selectAllBox = headerLayer.querySelector(".sandbox-select-all-checkbox");
+            if (!selectAllBox) {
+                selectAllBox = makeCheckbox("sandbox-select-all-checkbox");
+                selectAllBox.title = "Select all";
+                selectAllBox.addEventListener("change", () => {
+                    if (selectAllBox.checked) selectAll();
+                    else clearSelection();
+                });
+                headerLayer.appendChild(selectAllBox);
+            }
+            placeAt(selectAllBox, headerRect, headerLayer.getBoundingClientRect());
         }
-        placeAt(selectAllBox, headerRow.getBoundingClientRect(), wrapperRect);
     }
 
-    // A checkbox and a delete button per rendered row.
+    // A checkbox and a delete button per rendered row, clipped to the scrolling
+    // body so nothing bleeds over the pagination footer.
+    const overlay = getOverlayLayer(
+        "sandbox-selection-overlay",
+        viewport.getBoundingClientRect(),
+        wrapperRect
+    );
+    if (!overlay) return;
+    const layerRect = overlay.getBoundingClientRect();
+
     const live = new Set();
     renderedRows().forEach((row) => {
         const id = itemIdOf(row);
@@ -280,7 +307,7 @@ function syncRenderedCheckboxes() {
             });
             overlay.appendChild(checkbox);
         }
-        placeAt(checkbox, rowRect, wrapperRect);
+        placeAt(checkbox, rowRect, layerRect);
         checkbox.checked = selected.has(id);
 
         // The per-row delete button sits in the space the stylesheet reserves at
@@ -310,8 +337,8 @@ function syncRenderedCheckboxes() {
         }
 
         const actionsRect = actionsCell.getBoundingClientRect();
-        rowDelete.style.left = `${actionsRect.left - wrapperRect.left + 4}px`;
-        placeAt(rowDelete, rowRect, wrapperRect);
+        rowDelete.style.left = `${actionsRect.left - layerRect.left + 4}px`;
+        placeAt(rowDelete, rowRect, layerRect);
     });
 
     // Drop controls whose row has been recycled out of view.
