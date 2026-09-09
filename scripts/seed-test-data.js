@@ -29,6 +29,9 @@
     // progtype is a numeric id; 23 is "Java (main)".
     const JAVA_MAIN = "23";
 
+    // AG Grid's row height, used to step the scroll walk by just under a viewport.
+    const ROW_HEIGHT_PX = 56;
+
     function csrfToken() {
         const token = document.cookie
             .split("; ")
@@ -132,9 +135,22 @@
         ).filter(Boolean);
 
         const toFile = programs.slice(loose);
+        let moveFailures = 0;
         if (folders.length) {
-            await pooled(toFile, (programId, i) =>
+            const moves = await pooled(toFile, (programId, i) =>
                 moveToFolder(programId, folders[i % folders.length])
+            );
+            moveFailures = moves.filter((res) => !res.ok).length;
+        }
+
+        // createFolder/createProgram already warn per item; this is the summary,
+        // so a partial seed is obvious rather than silently short.
+        const missing =
+            folderCount - folders.length + (programCount - programs.length);
+        if (missing || moveFailures) {
+            console.warn(
+                `${missing} item(s) could not be created and ` +
+                    `${moveFailures} move(s) failed — the seed is incomplete.`
             );
         }
 
@@ -145,20 +161,57 @@
         return { folders, programs };
     };
 
-    // Deletes every row currently in the grid, folders included. Programs inside
-    // a deleted folder move back to the top level rather than being destroyed, so
-    // this may need a second run to fully empty the sandbox.
-    window.deleteEverything = async function deleteEverything() {
-        const ids = Array.from(document.querySelectorAll(".ag-row"))
-            .map((row) => (row.getAttribute("row-id") || "").replace("item-", ""))
-            .filter((id) => /^\d+$/.test(id));
+    // The grid is virtualised: querying .ag-row only ever returns the handful of
+    // rows currently scrolled into view (19 of 87, in one measurement). Anything
+    // that wants every id has to scroll the viewport and collect as it goes.
+    async function collectRowIds() {
+        const viewport = document.querySelector(".ag-body-viewport");
+        if (!viewport) return [];
 
-        console.log(`Deleting ${ids.length} visible items…`);
-        await pooled(ids, (id) =>
-            post(ENDPOINTS.deleteItem, { program: id, method: "delete_sandbox" })
+        const originalScrollTop = viewport.scrollTop;
+        const step = Math.max(viewport.clientHeight - ROW_HEIGHT_PX, ROW_HEIGHT_PX);
+        const maxScroll = () =>
+            Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+        const ids = new Set();
+
+        const limit = Math.ceil(maxScroll() / step) + 2;
+        for (let i = 0, top = 0; i < limit; i += 1, top += step) {
+            viewport.scrollTop = top;
+            await new Promise((resolve) =>
+                requestAnimationFrame(() => requestAnimationFrame(resolve))
+            );
+            document.querySelectorAll(".ag-row").forEach((row) => {
+                const id = (row.getAttribute("row-id") || "").replace("item-", "");
+                if (/^\d+$/.test(id)) ids.add(id);
+            });
+            if (top >= maxScroll()) break;
+        }
+
+        viewport.scrollTop = originalScrollTop;
+        return Array.from(ids);
+    }
+
+    // Deletes every row on the current page, folders included. Two reasons it may
+    // need a second run: the grid paginates (50 rows by default) so later pages
+    // are out of reach, and programs inside a deleted folder move back to the top
+    // level rather than being destroyed.
+    window.deleteEverything = async function deleteEverything() {
+        const ids = await collectRowIds();
+        console.log(`Deleting ${ids.length} items…`);
+
+        const outcomes = await pooled(ids, async (id) => ({
+            id,
+            ok: (await post(ENDPOINTS.deleteItem, { program: id, method: "delete_sandbox" })).ok,
+        }));
+        const failed = outcomes.filter((outcome) => !outcome.ok).map((o) => o.id);
+
+        if (failed.length) {
+            console.warn(`${failed.length} deletions failed:`, failed);
+        }
+        console.log(
+            `Deleted ${ids.length - failed.length}. Reload; run again if rows remain.`
         );
-        console.log("Done. Reload; run again if folders left programs behind.");
-        return ids.length;
+        return { deleted: ids.length - failed.length, failed };
     };
 
     console.log(
