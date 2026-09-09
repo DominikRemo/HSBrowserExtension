@@ -1,2 +1,10 @@
-# Apple 
+# Apple
 .DS_Store
+
+# Build output
+dist/
+node_modules/
+web-ext-artifacts/
+
+# Playwright MCP
+.playwright-mcp/
