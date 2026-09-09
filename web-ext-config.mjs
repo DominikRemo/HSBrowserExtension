@@ -4,7 +4,6 @@ export default {
   ignoreFiles: [
     "dist",
     "node_modules",
-    "packaged",
     "scripts",
     "package.json",
     "package-lock.json",
