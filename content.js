@@ -81,11 +81,24 @@ function updateToolbar() {
     }
 }
 
-function createToolbarButton(className, label, onClick) {
+// CodeHS styles its own toolbar buttons as `btn btn-main-white btn-sm` with a
+// leading Font Awesome icon, so ours are built the same way to sit in the row
+// without looking bolted on.
+function createToolbarButton(className, iconClass, label, onClick) {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = `btn btn-sm ${className}`;
-    button.textContent = label;
+    button.className = `btn btn-main-white btn-sm ${className}`;
+
+    const icon = document.createElement("span");
+    icon.className = iconClass;
+    icon.setAttribute("aria-hidden", "true");
+    button.appendChild(icon);
+
+    const text = document.createElement("span");
+    text.className = "sandbox-delete-selected-label";
+    text.textContent = label;
+    button.appendChild(text);
+
     button.addEventListener("click", (e) => {
         e.preventDefault();
         onClick();
@@ -167,19 +180,14 @@ function setupToolbar() {
     if (!bar || bar.querySelector(".sandbox-delete-selected-button")) return;
 
     const deleteButton = createToolbarButton(
-        "btn-danger sandbox-delete-selected-button",
-        ""
-    , deleteSelected);
-    const label = document.createElement("span");
-    label.className = "sandbox-delete-selected-label";
-    label.textContent = "Delete selected";
-    deleteButton.appendChild(label);
+        "sandbox-delete-selected-button",
+        "fas fa-trash",
+        "Delete selected",
+        deleteSelected
+    );
     deleteButton.disabled = true;
 
-    bar.append(
-        createToolbarButton("btn-default sandbox-clear-selection-button", "Clear", clearSelection),
-        deleteButton
-    );
+    bar.appendChild(deleteButton);
     updateToolbar();
 }
 
@@ -216,8 +224,9 @@ function getOverlay() {
 
 // Positions are measured against the wrapper, so they stay correct whether the
 // grid scrolls, sorts or re-renders.
-function placeAt(checkbox, rect, wrapperRect) {
-    checkbox.style.top = `${rect.top - wrapperRect.top + rect.height / 2 - 7}px`;
+function placeAt(el, rect, wrapperRect) {
+    const half = (el.offsetHeight || 14) / 2;
+    el.style.top = `${rect.top - wrapperRect.top + rect.height / 2 - half}px`;
 }
 
 function makeCheckbox(className) {
@@ -252,12 +261,13 @@ function syncRenderedCheckboxes() {
         placeAt(selectAllBox, headerRow.getBoundingClientRect(), wrapperRect);
     }
 
-    // One checkbox per rendered row.
+    // A checkbox and a delete button per rendered row.
     const live = new Set();
     renderedRows().forEach((row) => {
         const id = itemIdOf(row);
         if (!id) return;
         live.add(id);
+        const rowRect = row.getBoundingClientRect();
 
         let checkbox = overlay.querySelector(`[data-item-id="${id}"]`);
         if (!checkbox) {
@@ -270,20 +280,53 @@ function syncRenderedCheckboxes() {
             });
             overlay.appendChild(checkbox);
         }
-
-        placeAt(checkbox, row.getBoundingClientRect(), wrapperRect);
+        placeAt(checkbox, rowRect, wrapperRect);
         checkbox.checked = selected.has(id);
+
+        // The per-row delete button sits in the space the stylesheet reserves at
+        // the head of the actions column, beside CodeHS's own "..." menu.
+        const actionsCell = row.querySelector('[col-id="actions"]');
+        if (!actionsCell) return;
+
+        let rowDelete = overlay.querySelector(`[data-delete-for="${id}"]`);
+        if (!rowDelete) {
+            rowDelete = document.createElement("button");
+            rowDelete.type = "button";
+            rowDelete.className = "sandbox-row-delete-button";
+            rowDelete.dataset.deleteFor = id;
+            rowDelete.title = "Delete";
+            rowDelete.setAttribute("aria-label", "Delete");
+            const icon = document.createElement("span");
+            icon.className = "fas fa-trash";
+            icon.setAttribute("aria-hidden", "true");
+            rowDelete.appendChild(icon);
+            rowDelete.addEventListener("click", async (e) => {
+                e.preventDefault();
+                rowDelete.disabled = true;
+                await deleteItem(id);
+                window.location.reload();
+            });
+            overlay.appendChild(rowDelete);
+        }
+
+        const actionsRect = actionsCell.getBoundingClientRect();
+        rowDelete.style.left = `${actionsRect.left - wrapperRect.left + 4}px`;
+        placeAt(rowDelete, rowRect, wrapperRect);
     });
 
-    // Drop checkboxes whose row has been recycled out of view.
-    overlay.querySelectorAll(".sandbox-checkbox").forEach((checkbox) => {
-        if (!live.has(checkbox.dataset.itemId)) checkbox.remove();
-    });
+    // Drop controls whose row has been recycled out of view.
+    overlay
+        .querySelectorAll(".sandbox-checkbox, .sandbox-row-delete-button")
+        .forEach((el) => {
+            const id = el.dataset.itemId || el.dataset.deleteFor;
+            if (!live.has(id)) el.remove();
+        });
 }
 
-// Indent the name column so the overlay checkboxes do not sit on top of the
-// names. A stylesheet is safe where DOM edits are not, because it does not touch
-// the React-rendered cell contents.
+// Indent the name and actions columns so the overlay controls have space of
+// their own instead of sitting on top of the names and CodeHS's "..." menu. A
+// stylesheet is safe where DOM edits are not, because it does not touch the
+// React-rendered cell contents.
 function setupStyles() {
     if (document.getElementById("sandbox-bulk-delete-styles")) return;
     const style = document.createElement("style");
@@ -292,6 +335,31 @@ function setupStyles() {
         ${GRID_SELECTOR} .ag-center-cols-container .ag-cell[col-id="name"],
         ${GRID_SELECTOR} .ag-header-cell[col-id="name"] {
             padding-left: 28px;
+        }
+        ${GRID_SELECTOR} .ag-center-cols-container .ag-cell[col-id="actions"] {
+            padding-left: 28px;
+        }
+        .sandbox-row-delete-button {
+            background: none;
+            border: 0;
+            padding: 4px 6px;
+            line-height: 1;
+            color: #c9302c;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+        .sandbox-row-delete-button:hover {
+            background: rgba(201, 48, 44, 0.12);
+        }
+        .sandbox-row-delete-button[disabled] {
+            opacity: 0.5;
+            cursor: default;
+        }
+        .sandbox-delete-selected-button:not([disabled]) {
+            color: #c9302c;
+        }
+        .sandbox-delete-selected-button .sandbox-delete-selected-label {
+            margin-left: 6px;
         }
     `;
     document.head.appendChild(style);
