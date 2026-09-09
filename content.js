@@ -309,51 +309,17 @@ function syncRenderedCheckboxes() {
         }
         placeAt(checkbox, rowRect, layerRect);
         checkbox.checked = selected.has(id);
-
-        // The per-row delete button sits in the space the stylesheet reserves at
-        // the head of the actions column, beside CodeHS's own "..." menu.
-        const actionsCell = row.querySelector('[col-id="actions"]');
-        if (!actionsCell) return;
-
-        let rowDelete = overlay.querySelector(`[data-delete-for="${id}"]`);
-        if (!rowDelete) {
-            rowDelete = document.createElement("button");
-            rowDelete.type = "button";
-            rowDelete.className = "sandbox-row-delete-button";
-            rowDelete.dataset.deleteFor = id;
-            rowDelete.title = "Delete";
-            rowDelete.setAttribute("aria-label", "Delete");
-            const icon = document.createElement("span");
-            icon.className = "fas fa-trash";
-            icon.setAttribute("aria-hidden", "true");
-            rowDelete.appendChild(icon);
-            rowDelete.addEventListener("click", async (e) => {
-                e.preventDefault();
-                rowDelete.disabled = true;
-                await deleteItem(id);
-                window.location.reload();
-            });
-            overlay.appendChild(rowDelete);
-        }
-
-        const actionsRect = actionsCell.getBoundingClientRect();
-        rowDelete.style.left = `${actionsRect.left - layerRect.left + 4}px`;
-        placeAt(rowDelete, rowRect, layerRect);
     });
 
-    // Drop controls whose row has been recycled out of view.
-    overlay
-        .querySelectorAll(".sandbox-checkbox, .sandbox-row-delete-button")
-        .forEach((el) => {
-            const id = el.dataset.itemId || el.dataset.deleteFor;
-            if (!live.has(id)) el.remove();
-        });
+    // Drop checkboxes whose row has been recycled out of view.
+    overlay.querySelectorAll(".sandbox-checkbox").forEach((checkbox) => {
+        if (!live.has(checkbox.dataset.itemId)) checkbox.remove();
+    });
 }
 
-// Indent the name and actions columns so the overlay controls have space of
-// their own instead of sitting on top of the names and CodeHS's "..." menu. A
-// stylesheet is safe where DOM edits are not, because it does not touch the
-// React-rendered cell contents.
+// Indent the name column so the overlay checkboxes have space of their own
+// instead of sitting on top of the program names. A stylesheet is safe where DOM
+// edits are not, because it does not touch the React-rendered cell contents.
 function setupStyles() {
     if (document.getElementById("sandbox-bulk-delete-styles")) return;
     const style = document.createElement("style");
@@ -362,30 +328,6 @@ function setupStyles() {
         ${GRID_SELECTOR} .ag-center-cols-container .ag-cell[col-id="name"],
         ${GRID_SELECTOR} .ag-header-cell[col-id="name"] {
             padding-left: 28px;
-        }
-        ${GRID_SELECTOR} .ag-center-cols-container .ag-cell[col-id="actions"] {
-            padding-left: 28px;
-        }
-        .sandbox-row-delete-button {
-            /* The overlay is pointer-events:none so the grid stays clickable
-               through it; each control has to opt back in. Without the absolute
-               position the top/left set per row would also be ignored. */
-            position: absolute;
-            pointer-events: auto;
-            background: none;
-            border: 0;
-            padding: 4px 6px;
-            line-height: 1;
-            color: #c9302c;
-            cursor: pointer;
-            border-radius: 4px;
-        }
-        .sandbox-row-delete-button:hover {
-            background: rgba(201, 48, 44, 0.12);
-        }
-        .sandbox-row-delete-button[disabled] {
-            opacity: 0.5;
-            cursor: default;
         }
         .sandbox-delete-selected-button:not([disabled]) {
             color: #c9302c;
