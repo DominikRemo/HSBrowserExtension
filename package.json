@@ -1,0 +1,20 @@
+{
+  "name": "hs-browser-extension",
+  "version": "0.1.5",
+  "private": true,
+  "description": "Utility Browser Extension für die Hacker School - Bulk Delete für CodeHS",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/DominikRemo/HSBrowserExtension.git"
+  },
+  "scripts": {
+    "lint": "web-ext lint --self-hosted",
+    "build": "./scripts/build.sh",
+    "sign": "web-ext sign --channel=unlisted --artifacts-dir dist",
+    "start:firefox": "web-ext run --target firefox-desktop --start-url https://codehs.com/explore/sandbox",
+    "start:chrome": "web-ext run --target chromium --start-url https://codehs.com/explore/sandbox"
+  },
+  "devDependencies": {
+    "web-ext": "^8.3.0"
+  }
+}

@@ -1,0 +1,66 @@
+name: Release
+
+# Cut a release by bumping the version in manifest.json + package.json on main,
+# then pushing a matching tag:
+#
+#     git tag v0.2.0 && git push origin v0.2.0
+#
+# This builds the Chrome zip, has Mozilla sign the Firefox .xpi, publishes both
+# as release assets, and updates updates.json on main so existing Firefox
+# installs auto-update.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+
+      - name: Resolve and verify version
+        id: version
+        run: echo "version=$(scripts/check-version.sh '${{ github.ref_name }}')" >> "$GITHUB_OUTPUT"
+
+      - name: Build unsigned archives
+        run: npm run build
+
+      - name: Sign Firefox add-on
+        env:
+          WEB_EXT_API_KEY: ${{ secrets.AMO_JWT_ISSUER }}
+          WEB_EXT_API_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+        run: |
+          npx web-ext sign --channel=unlisted --artifacts-dir dist
+          mv dist/*.xpi "dist/hs-browser-extension-${{ steps.version.outputs.version }}.xpi"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "v${{ steps.version.outputs.version }}" \
+            --generate-notes \
+            dist/hs-browser-extension-${{ steps.version.outputs.version }}-chrome.zip \
+            dist/hs-browser-extension-${{ steps.version.outputs.version }}.xpi
+
+      - name: Point updates.json at the new release
+        run: |
+          node scripts/update-updates-json.mjs
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add updates.json
+          git diff --staged --quiet || git commit -m "chore: advertise v${{ steps.version.outputs.version }} in updates.json"
+          git push origin main

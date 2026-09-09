@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: manifest.json and package.json agree on the version
+        run: scripts/check-version.sh
+      - name: web-ext lint
+        run: npm run lint
+      - name: build archives
+        run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-build
+          path: dist/
