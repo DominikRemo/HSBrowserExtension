@@ -5,19 +5,19 @@
 // design here:
 //
 //   * There are no <table>/<tr> elements any more. Rows are div[role="row"].ag-row
-//     and the program id lives in row-id="item-<id>" rather than data-program-id.
+//     and the item id lives in row-id="item-<id>" rather than data-program-id.
+//     Folders and programs share the one grid and the one delete endpoint, so both
+//     are selectable. Deleting a folder moves the programs inside it back to the
+//     top level rather than destroying them, which is CodeHS's own behaviour.
 //   * The grid is virtualised: only the rows currently scrolled into view exist in
 //     the DOM, and they are recycled as you scroll. Selection therefore lives in a
-//     Set keyed by program id, and checkbox state is re-applied whenever a row is
-//     rendered. "Select all" has to walk the viewport to learn the ids it cannot see.
+//     Set keyed by id, and checkbox state is re-applied whenever a row is rendered.
+//     "Select all" has to walk the viewport to learn the ids it cannot see.
 //   * The cells are rendered by React components. Inserting a checkbox into a cell
 //     corrupts React's reconciliation and the program name disappears on the next
-//     re-render, so the checkboxes live in an overlay layer that is positioned over
-//     the rows instead of inside them. AG Grid owns the row containers imperatively,
-//     which makes the container — unlike the cells — safe to append to.
-//   * Folders and programs share one grid, told apart only by the type column.
-//     Only programs are deletable here — the folder delete endpoint is different
-//     and is deliberately not touched.
+//     re-render, so the checkboxes live in overlay layers positioned over the rows
+//     and the header instead of inside them. AG Grid owns those containers
+//     imperatively, which makes them — unlike the cells — safe to append to.
 //
 // The delete request itself is unchanged from the previous CodeHS client.
 
@@ -33,42 +33,52 @@ function getCSRFToken() {
     return token ? token.split("=")[1] : "";
 }
 
-function deleteProgram(programId) {
+function deleteItem(id) {
     return fetch("https://codehs.com/library/ajax/delete_sandbox", {
         method: "POST",
         headers: {
             "Content-Type": "application/x-www-form-urlencoded",
             "X-CSRFToken": getCSRFToken(),
         },
-        body: `program=${programId}&method=delete_sandbox`,
+        body: `program=${id}&method=delete_sandbox`,
     });
 }
 
 // row-id is "item-24021934"; the delete endpoint wants the bare number.
-function programIdOf(row) {
+function itemIdOf(row) {
     const rowId = row.getAttribute("row-id");
     if (!rowId || !rowId.startsWith(ROW_ID_PREFIX)) return null;
     const id = rowId.slice(ROW_ID_PREFIX.length);
     return /^\d+$/.test(id) ? id : null;
 }
 
-function isFolder(row) {
-    const typeCell = row.querySelector('[col-id="type"]');
-    return typeCell ? typeCell.textContent.trim() === "Folder" : false;
-}
-
 function getViewport() {
     return document.querySelector(`${GRID_SELECTOR} .ag-body-viewport`);
+}
+
+function renderedRows() {
+    return Array.from(document.querySelectorAll(`${GRID_SELECTOR} .ag-row`));
 }
 
 // --- toolbar ---------------------------------------------------------------
 
 function updateToolbar() {
     const button = document.querySelector(".sandbox-delete-selected-button");
-    if (!button) return;
-    button.disabled = selected.size === 0;
-    button.querySelector(".sandbox-delete-selected-label").textContent =
-        selected.size === 0 ? "Delete selected" : `Delete selected (${selected.size})`;
+    if (button) {
+        button.disabled = selected.size === 0;
+        button.querySelector(".sandbox-delete-selected-label").textContent =
+            selected.size === 0
+                ? "Delete selected"
+                : `Delete selected (${selected.size})`;
+    }
+
+    const selectAllBox = document.querySelector(".sandbox-select-all-checkbox");
+    if (selectAllBox) {
+        const ids = renderedRows().map(itemIdOf).filter(Boolean);
+        const allChecked = ids.length > 0 && ids.every((id) => selected.has(id));
+        selectAllBox.checked = selected.size > 0 && allChecked;
+        selectAllBox.indeterminate = selected.size > 0 && !allChecked;
+    }
 }
 
 function createToolbarButton(className, label, onClick) {
@@ -92,30 +102,43 @@ async function forEachRowByScrolling(callback) {
     const originalScrollTop = viewport.scrollTop;
     const step = Math.max(viewport.clientHeight - 56, 56);
     const seen = new Set();
+    const maxScroll = () =>
+        Math.max(0, viewport.scrollHeight - viewport.clientHeight);
 
-    for (let top = 0; ; top += step) {
-        viewport.scrollTop = top;
-        // Give AG Grid a frame to render the rows for this scroll offset.
-        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    // The observer must stay off for the whole walk: it would otherwise fire on
+    // every row AG Grid renders as we scroll and starve the frames this loop is
+    // waiting on.
+    suspendObserver();
+    try {
+        // Bounded by the row count so a mis-measured viewport can never spin.
+        const limit = Math.ceil(maxScroll() / step) + 2;
 
-        document.querySelectorAll(`${GRID_SELECTOR} .ag-row`).forEach((row) => {
-            const id = programIdOf(row);
-            if (id && !seen.has(id)) {
-                seen.add(id);
-                callback(row, id);
-            }
-        });
+        for (let i = 0, top = 0; i < limit; i += 1, top += step) {
+            viewport.scrollTop = top;
+            // Give AG Grid a frame to render the rows for this scroll offset.
+            await new Promise((resolve) =>
+                requestAnimationFrame(() => requestAnimationFrame(resolve))
+            );
 
-        if (top >= viewport.scrollHeight - viewport.clientHeight) break;
+            renderedRows().forEach((row) => {
+                const id = itemIdOf(row);
+                if (id && !seen.has(id)) {
+                    seen.add(id);
+                    callback(row, id);
+                }
+            });
+
+            if (top >= maxScroll()) break;
+        }
+
+        viewport.scrollTop = originalScrollTop;
+    } finally {
+        resumeObserver();
     }
-
-    viewport.scrollTop = originalScrollTop;
 }
 
 async function selectAll() {
-    await forEachRowByScrolling((row, id) => {
-        if (!isFolder(row)) selected.add(id);
-    });
+    await forEachRowByScrolling((row, id) => selected.add(id));
     syncRenderedCheckboxes();
     updateToolbar();
 }
@@ -133,97 +156,113 @@ async function deleteSelected() {
     const button = document.querySelector(".sandbox-delete-selected-button");
     if (button) button.disabled = true;
 
-    await Promise.all(ids.map((id) => deleteProgram(id)));
+    await Promise.all(ids.map((id) => deleteItem(id)));
     window.location.reload();
 }
 
 function setupToolbar() {
-    const bar = document.querySelector(".sandbox-programs-controls") ||
+    const bar =
+        document.querySelector(".sandbox-programs-controls") ||
         document.querySelector(".sandbox-programs-bar");
     if (!bar || bar.querySelector(".sandbox-delete-selected-button")) return;
 
-    const selectAllButton = createToolbarButton(
-        "btn-default sandbox-select-all-button",
-        "Select all",
-        selectAll
-    );
-
-    const clearButton = createToolbarButton(
-        "btn-default sandbox-clear-selection-button",
-        "Clear",
-        clearSelection
-    );
-
     const deleteButton = createToolbarButton(
         "btn-danger sandbox-delete-selected-button",
-        "",
-        deleteSelected
-    );
+        ""
+    , deleteSelected);
     const label = document.createElement("span");
     label.className = "sandbox-delete-selected-label";
     label.textContent = "Delete selected";
     deleteButton.appendChild(label);
     deleteButton.disabled = true;
 
-    bar.append(selectAllButton, clearButton, deleteButton);
+    bar.append(
+        createToolbarButton("btn-default sandbox-clear-selection-button", "Clear", clearSelection),
+        deleteButton
+    );
     updateToolbar();
 }
 
-// --- rows ------------------------------------------------------------------
+// --- checkbox overlays -----------------------------------------------------
 
-// Rows are absolutely positioned by AG Grid via `transform: translateY(<n>px)`,
-// so the overlay can mirror them exactly by reading that offset back.
-function rowOffsetTop(row) {
-    const match = /translateY\((-?[\d.]+)px\)/.exec(row.style.transform || "");
-    return match ? parseFloat(match[1]) : row.offsetTop;
-}
-
+// The overlay deliberately hangs off the outer .sandbox-programs-grid wrapper
+// rather than off AG Grid's own row/header containers. AG Grid rebuilds the
+// children of those containers on every render, which removed the overlay, which
+// woke the observer, which put it back — a mutual-recursion loop that pegged the
+// page. The wrapper is ours to append to and is never rebuilt.
 function getOverlay() {
-    const container = document.querySelector(
-        `${GRID_SELECTOR} .ag-center-cols-container`
-    );
-    if (!container) return null;
+    const wrapper = document.querySelector(GRID_SELECTOR);
+    if (!wrapper) return null;
 
-    let overlay = container.querySelector(".sandbox-selection-overlay");
+    if (getComputedStyle(wrapper).position === "static") {
+        wrapper.style.position = "relative";
+    }
+
+    let overlay = wrapper.querySelector(":scope > .sandbox-selection-overlay");
     if (!overlay) {
         overlay = document.createElement("div");
         overlay.className = "sandbox-selection-overlay";
         overlay.style.position = "absolute";
-        overlay.style.top = "0";
-        overlay.style.left = "0";
-        overlay.style.width = "24px";
-        overlay.style.height = "100%";
+        overlay.style.inset = "0";
+        overlay.style.overflow = "hidden";
         // Only the checkboxes themselves should swallow clicks; the rest of the
-        // row must stay clickable.
+        // grid must stay clickable.
         overlay.style.pointerEvents = "none";
         overlay.style.zIndex = "1";
-        container.appendChild(overlay);
+        wrapper.appendChild(overlay);
     }
     return overlay;
+}
+
+// Positions are measured against the wrapper, so they stay correct whether the
+// grid scrolls, sorts or re-renders.
+function placeAt(checkbox, rect, wrapperRect) {
+    checkbox.style.top = `${rect.top - wrapperRect.top + rect.height / 2 - 7}px`;
+}
+
+function makeCheckbox(className) {
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.className = className;
+    checkbox.style.position = "absolute";
+    checkbox.style.left = "6px";
+    checkbox.style.pointerEvents = "auto";
+    checkbox.style.cursor = "pointer";
+    return checkbox;
 }
 
 function syncRenderedCheckboxes() {
     const overlay = getOverlay();
     if (!overlay) return;
+    const wrapperRect = overlay.parentElement.getBoundingClientRect();
 
-    const rows = document.querySelectorAll(`${GRID_SELECTOR} .ag-row`);
+    // Header select-all.
+    const headerRow = document.querySelector(`${GRID_SELECTOR} .ag-header-row`);
+    if (headerRow) {
+        let selectAllBox = overlay.querySelector(".sandbox-select-all-checkbox");
+        if (!selectAllBox) {
+            selectAllBox = makeCheckbox("sandbox-select-all-checkbox");
+            selectAllBox.title = "Select all";
+            selectAllBox.addEventListener("change", () => {
+                if (selectAllBox.checked) selectAll();
+                else clearSelection();
+            });
+            overlay.appendChild(selectAllBox);
+        }
+        placeAt(selectAllBox, headerRow.getBoundingClientRect(), wrapperRect);
+    }
+
+    // One checkbox per rendered row.
     const live = new Set();
-
-    rows.forEach((row) => {
-        const id = programIdOf(row);
-        // Folders share the grid but are not deletable through this endpoint.
-        if (!id || isFolder(row)) return;
+    renderedRows().forEach((row) => {
+        const id = itemIdOf(row);
+        if (!id) return;
         live.add(id);
 
-        let checkbox = overlay.querySelector(`[data-program-id="${id}"]`);
+        let checkbox = overlay.querySelector(`[data-item-id="${id}"]`);
         if (!checkbox) {
-            checkbox = document.createElement("input");
-            checkbox.type = "checkbox";
-            checkbox.className = "sandbox-checkbox";
-            checkbox.dataset.programId = id;
-            checkbox.style.position = "absolute";
-            checkbox.style.left = "6px";
-            checkbox.style.pointerEvents = "auto";
+            checkbox = makeCheckbox("sandbox-checkbox");
+            checkbox.dataset.itemId = id;
             checkbox.addEventListener("change", () => {
                 if (checkbox.checked) selected.add(id);
                 else selected.delete(id);
@@ -232,19 +271,19 @@ function syncRenderedCheckboxes() {
             overlay.appendChild(checkbox);
         }
 
-        checkbox.style.top = `${rowOffsetTop(row) + row.offsetHeight / 2 - 7}px`;
+        placeAt(checkbox, row.getBoundingClientRect(), wrapperRect);
         checkbox.checked = selected.has(id);
     });
 
     // Drop checkboxes whose row has been recycled out of view.
     overlay.querySelectorAll(".sandbox-checkbox").forEach((checkbox) => {
-        if (!live.has(checkbox.dataset.programId)) checkbox.remove();
+        if (!live.has(checkbox.dataset.itemId)) checkbox.remove();
     });
 }
 
 // Indent the name column so the overlay checkboxes do not sit on top of the
-// program names. A stylesheet is safe where DOM edits are not, because it does
-// not touch the React-rendered cell contents.
+// names. A stylesheet is safe where DOM edits are not, because it does not touch
+// the React-rendered cell contents.
 function setupStyles() {
     if (document.getElementById("sandbox-bulk-delete-styles")) return;
     const style = document.createElement("style");
@@ -258,19 +297,63 @@ function setupStyles() {
     document.head.appendChild(style);
 }
 
-function enhanceAll() {
-    setupStyles();
-    setupToolbar();
-    syncRenderedCheckboxes();
-}
-
 // --- setup -----------------------------------------------------------------
 
 // The grid mounts asynchronously and recycles its rows on every scroll, sort and
-// filter, so a single observer over the document keeps everything in sync.
-const observer = new MutationObserver(() => {
-    if (document.querySelector(GRID_SELECTOR)) enhanceAll();
-});
+// filter, so an observer keeps everything in sync. Two things keep that observer
+// from starving the page, both learned the hard way:
+//
+//   * It is disconnected while we write to the DOM, so our own edits can never
+//     wake it and feed back into another pass.
+//   * Passes are coalesced onto one animation frame. AG Grid emits a burst of
+//     mutations per render, and running a pass per mutation left no frame budget
+//     for anything else — during a "select all" scroll the awaited frames never
+//     arrived and the page locked up.
+const observer = new MutationObserver(scheduleEnhance);
+let scheduled = false;
+let suspended = 0;
 
-observer.observe(document, { childList: true, subtree: true });
+function observe() {
+    observer.observe(document, { childList: true, subtree: true });
+}
+
+function enhanceAll() {
+    if (suspended > 0) return;
+    observer.disconnect();
+    try {
+        setupStyles();
+        setupToolbar();
+        syncRenderedCheckboxes();
+        updateToolbar();
+    } finally {
+        observe();
+    }
+}
+
+function scheduleEnhance() {
+    if (scheduled || suspended > 0) return;
+    scheduled = true;
+    requestAnimationFrame(() => {
+        scheduled = false;
+        if (document.querySelector(GRID_SELECTOR)) enhanceAll();
+    });
+}
+
+// Used to hold the observer off entirely while we drive the grid ourselves.
+function suspendObserver() {
+    suspended += 1;
+    observer.disconnect();
+}
+
+function resumeObserver() {
+    suspended = Math.max(0, suspended - 1);
+    if (suspended === 0) observe();
+}
+
+// Row positions are measured from the viewport, so they must be refreshed on
+// scroll as well as on mutation.
+document.addEventListener("scroll", scheduleEnhance, { capture: true, passive: true });
+window.addEventListener("resize", scheduleEnhance, { passive: true });
+
+observe();
 enhanceAll();
